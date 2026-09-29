@@ -1,0 +1,500 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Reddit in 30 Seconds</title>
+<style>
+  @font-face{font-family:Inter;font-weight:400;src:url(fonts/inter-latin-400-normal.woff2)}
+  @font-face{font-family:Inter;font-weight:700;src:url(fonts/inter-latin-700-normal.woff2)}
+  @font-face{font-family:Inter;font-weight:800;src:url(fonts/inter-latin-800-normal.woff2)}
+  @font-face{font-family:Inter;font-weight:900;src:url(fonts/inter-latin-900-normal.woff2)}
+  html,body{margin:0;height:100%;background:#000;overflow:hidden}
+  canvas{display:block;margin:auto;position:absolute;inset:0;width:min(100vw,177.7778vh);height:auto;aspect-ratio:16/9}
+</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script>
+/* ------------------------------------------------------------------
+   Reddit in 30 seconds — a fully deterministic, time-driven motion piece.
+   window.draw(t) paints the frame at time t (seconds). Timeline:
+     0.0  S1  logo + tagline
+     5.0  S2  communities
+    10.0  S3  voting
+    17.5  S4  comment threads
+    22.5  S5  numbers
+    27.5  S6  outro
+   (96 BPM: one bar = 2.5s, every scene boundary lands on a bar line)
+------------------------------------------------------------------- */
+const W = 1920, H = 1080, DUR = 30;
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+/* ---------- math + easing ---------- */
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const P = (t, s, d) => clamp((t - s) / d);
+const lerp = (a, b, k) => a + (b - a) * k;
+const E = {
+  lin: x => x,
+  out3: x => 1 - Math.pow(1 - x, 3),
+  out5: x => 1 - Math.pow(1 - x, 5),
+  inOut3: x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2,
+  back: x => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); },
+  elastic: x => x === 0 ? 0 : x === 1 ? 1 : Math.pow(2, -10 * x) * Math.sin((x * 10 - .75) * (2 * Math.PI) / 3) + 1,
+};
+function rng(seed) {
+  return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+
+const C = {
+  orange: '#FF4500', dark: '#0E1113', card: '#1A1D21', line: '#343536',
+  light: '#DAE0E6', warm: '#FFF6F0', ink: '#1C1C1C', mute: '#7C7C7C',
+  blue: '#0079D3', green: '#22B45A', purple: '#8E5CF7', yellow: '#FFB000', teal: '#0DB8A5', pink: '#FF5C9E',
+};
+
+/* ---------- drawing helpers ---------- */
+const fontOf = (size, weight) => `${weight} ${size}px Inter, sans-serif`;
+function T(s, x, y, o = {}) {
+  const { size = 48, weight = 700, color = '#fff', align = 'left', alpha = 1, ls = 0 } = o;
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  ctx.font = fontOf(size, weight);
+  ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = 'alphabetic';
+  if (ls) ctx.letterSpacing = ls + 'px';
+  ctx.fillText(s, x, y);
+  ctx.restore();
+}
+function M(s, size, weight) {
+  ctx.save(); ctx.font = fontOf(size, weight);
+  const w = ctx.measureText(s).width; ctx.restore(); return w;
+}
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+function wrap(s, maxW, size, weight) {
+  const words = s.split(' '), lines = []; let cur = '';
+  for (const w of words) {
+    const test = cur ? cur + ' ' + w : w;
+    if (M(test, size, weight) > maxW && cur) { lines.push(cur); cur = w; } else cur = test;
+  }
+  if (cur) lines.push(cur); return lines;
+}
+/* letters rise + fade in one at a time */
+function letters(s, cx, y, size, weight, color, lt, t0, stag, dur, rise = size * .45) {
+  const total = M(s, size, weight), x0 = cx - total / 2;
+  for (let i = 0; i < s.length; i++) {
+    const p = E.out5(P(lt, t0 + i * stag, dur));
+    if (p <= 0) continue;
+    T(s[i], x0 + M(s.slice(0, i), size, weight), y + (1 - p) * rise, { size, weight, color, alpha: p });
+  }
+}
+function fmtK(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(Math.round(n)); }
+
+/* mascot — a simple original alien-style icon */
+function snoo(cx, cy, r, o = {}) {
+  const { disc = '#fff', fg = C.orange, eye = '#fff', blink = 0, tilt = 0 } = o;
+  if (r <= 0.5) return;
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(tilt);
+  ctx.fillStyle = disc; ctx.beginPath(); ctx.arc(0, 0, r, 0, 7); ctx.fill();
+  ctx.fillStyle = fg; ctx.strokeStyle = fg; ctx.lineCap = 'round';
+  for (const s of [-1, 1]) { ctx.beginPath(); ctx.arc(s * .58 * r, -.01 * r, .125 * r, 0, 7); ctx.fill(); }
+  ctx.beginPath(); ctx.ellipse(0, .16 * r, .58 * r, .42 * r, 0, 0, 7); ctx.fill();
+  ctx.lineWidth = .05 * r;
+  ctx.beginPath(); ctx.moveTo(0, -.24 * r); ctx.quadraticCurveTo(.03 * r, -.52 * r, .3 * r, -.56 * r); ctx.stroke();
+  ctx.beginPath(); ctx.arc(.35 * r, -.56 * r, .095 * r, 0, 7); ctx.fill();
+  ctx.fillStyle = eye; ctx.strokeStyle = eye;
+  for (const s of [-1, 1]) { ctx.beginPath(); ctx.ellipse(s * .24 * r, .07 * r, .1 * r, Math.max(.008, .1 * (1 - blink)) * r, 0, 0, 7); ctx.fill(); }
+  ctx.lineWidth = .04 * r;
+  ctx.beginPath(); ctx.arc(0, .17 * r, .24 * r, .15 * Math.PI, .85 * Math.PI); ctx.stroke();
+  ctx.restore();
+}
+function dotGrid(t, color, alpha, gap = 56) {
+  ctx.save(); ctx.fillStyle = color; ctx.globalAlpha = alpha;
+  const ox = (t * 14) % gap, oy = (t * 7) % gap;
+  for (let y = -gap; y < H + gap; y += gap) for (let x = -gap; x < W + gap; x += gap) {
+    ctx.beginPath(); ctx.arc(x + ox, y + oy, 2.4, 0, 7); ctx.fill();
+  }
+  ctx.restore();
+}
+function glow(x, y, r, rgb, a) {
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, `rgba(${rgb},${a})`); g.addColorStop(1, `rgba(${rgb},0)`);
+  ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+}
+function pulseRings(lt, cx, cy, start, base, alpha) {
+  if (lt < start) return;
+  for (let i = 0; i < 5; i++) {
+    const q = (((lt - start) * .45 - i * .2) % 1 + 1) % 1;
+    ctx.strokeStyle = `rgba(255,255,255,${alpha * (1 - q)})`; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(cx, cy, base + q * 1000, 0, 7); ctx.stroke();
+  }
+}
+function burst(lt, t0, cx, cy, n, dist, color, seed) {
+  const p = P(lt, t0, .9); if (p <= 0 || p >= 1) return;
+  const r = rng(seed);
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + r() * .4, d = dist * (.75 + r() * .5) * E.out3(p);
+    ctx.fillStyle = color; ctx.globalAlpha = 1 - p;
+    ctx.beginPath(); ctx.arc(cx + Math.cos(a) * d, cy + Math.sin(a) * d, (5 + r() * 8) * (1 - p * .6), 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+function tag(label, x, y, lt, t0, bg = C.orange, fg = '#fff') {
+  const p = E.out3(P(lt, t0, .5)); if (p <= 0) return;
+  const w = M(label, 28, 800) + 44;
+  ctx.save(); ctx.globalAlpha = p; ctx.translate(0, (1 - p) * 20);
+  ctx.fillStyle = bg; rr(x, y, w * (0.6 + .4 * p), 54, 27); ctx.fill();
+  ctx.save(); rr(x, y, w * (0.6 + .4 * p), 54, 27); ctx.clip();
+  T(label, x + 22, y + 37, { size: 28, weight: 800, color: fg, ls: 2 }); ctx.restore();
+  ctx.restore();
+}
+function arrowPath(cx, cy, s, up) {
+  const d = up ? -1 : 1;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + d * 24 * s);
+  ctx.lineTo(cx + 22 * s, cy - d * 2 * s); ctx.lineTo(cx + 9 * s, cy - d * 2 * s);
+  ctx.lineTo(cx + 9 * s, cy - d * 22 * s); ctx.lineTo(cx - 9 * s, cy - d * 22 * s);
+  ctx.lineTo(cx - 9 * s, cy - d * 2 * s); ctx.lineTo(cx - 22 * s, cy - d * 2 * s); ctx.closePath();
+}
+
+/* ==================================================================
+   S1 — logo (0 → 5s)
+================================================================== */
+function s1(lt) {
+  ctx.fillStyle = C.orange; ctx.fillRect(0, 0, W, H);
+  glow(960, 420, 900, '255,140,80', .35);
+  pulseRings(lt, 960, 410, .5, 200, .16);
+  const p = E.back(P(lt, .2, .85));
+  const bob = Math.sin(lt * 2.2) * 8 * P(lt, 1, .5);
+  const bl = lt > 2.9 && lt < 3.15 ? Math.sin(P(lt, 2.9, .25) * Math.PI) : 0;
+  burst(lt, .45, 960, 410, 14, 330, '#fff', 11);
+  snoo(960, 410 + bob, 170 * p, { blink: bl, tilt: Math.sin(lt * 1.6) * .03 });
+  letters('reddit', 960, 770, 220, 900, '#fff', lt, 1.1, .09, .8, 120);
+  const p2 = E.out3(P(lt, 2.4, .8));
+  T('The front page of the internet.', 960, 890 + (1 - p2) * 30, { size: 58, weight: 700, align: 'center', alpha: p2 });
+  const bw = 520 * E.out5(P(lt, 2.2, .9));
+  ctx.fillStyle = 'rgba(255,255,255,.55)'; ctx.fillRect(960 - bw / 2, 925, bw, 5);
+}
+
+/* ==================================================================
+   S2 — communities (5 → 10s)
+================================================================== */
+const SUBS = [
+  ['r/aww', C.pink, 250, 240], ['r/AskReddit', C.orange, 1670, 240],
+  ['r/science', C.blue, 190, 430], ['r/music', C.purple, 1730, 430],
+  ['r/gaming', C.green, 270, 620], ['r/cooking', C.yellow, 1650, 620],
+  ['r/movies', C.teal, 200, 810], ['r/space', C.blue, 1720, 810],
+  ['r/pics', C.orange, 740, 130], ['r/DIY', C.green, 1180, 130],
+  ['r/books', C.purple, 740, 945], ['r/fitness', C.pink, 1180, 945],
+];
+function pill(name, color, cx, cy, p, lt, i) {
+  if (p <= 0) return;
+  const size = 40, tw = M(name, size, 700), w = tw + 130, h = 92;
+  const x = cx + Math.sin(lt * .9 + i) * 10, y = cy + Math.cos(lt * .7 + i * 1.3) * 12;
+  ctx.save(); ctx.translate(x, y); ctx.scale(p, p); ctx.rotate((1 - p) * .35 * (i % 2 ? 1 : -1));
+  ctx.shadowColor = 'rgba(0,0,0,.4)'; ctx.shadowBlur = 24; ctx.shadowOffsetY = 8;
+  ctx.fillStyle = C.card; rr(-w / 2, -h / 2, w, h, h / 2); ctx.fill();
+  ctx.shadowColor = 'transparent'; ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.stroke();
+  ctx.fillStyle = color; ctx.beginPath(); ctx.arc(-w / 2 + 46, 0, 32, 0, 7); ctx.fill();
+  T('r/', -w / 2 + 46, 12, { size: 34, weight: 900, align: 'center' });
+  T(name.slice(2), -w / 2 + 90, 14, { size, weight: 700 });
+  ctx.restore();
+}
+function s2(lt) {
+  ctx.fillStyle = C.dark; ctx.fillRect(0, 0, W, H);
+  dotGrid(lt, '#fff', .07);
+  glow(1500 + Math.sin(lt * .5) * 120, 880, 800, '255,69,0', .22);
+  glow(300, 200, 700, '0,121,211', .12);
+  // counter
+  const v = Math.round(100000 * E.out5(P(lt, .5, 2.7)));
+  const str = v.toLocaleString('en-US') + (v >= 100000 ? '+' : '');
+  const wf = M('100,000+', 240, 900), pop = 1 + .04 * Math.sin(P(lt, 3.2, .5) * Math.PI);
+  ctx.save(); ctx.translate(960, 500); ctx.scale(pop, pop); ctx.translate(-960, -500);
+  T(str, 960 - wf / 2, 540, { size: 240, weight: 900 });
+  ctx.restore();
+  const p1 = E.out3(P(lt, 1.0, .7));
+  T('active communities', 960, 672 + (1 - p1) * 24, { size: 70, weight: 800, color: C.orange, align: 'center', alpha: p1 });
+  const p2 = E.out3(P(lt, 2.4, .8));
+  T('One for every interest, hobby and obsession.', 960, 758 + (1 - p2) * 24,
+    { size: 42, weight: 400, color: '#A9AFB5', align: 'center', alpha: p2 });
+  SUBS.forEach((s, i) => pill(s[0], s[1], s[2], s[3], E.back(P(lt, .3 + i * .2, .6)), lt, i));
+}
+
+/* ==================================================================
+   S3 — voting (10 → 17.5s)
+================================================================== */
+const POSTS = [
+  { sub: 'r/todayilearned', title: 'TIL octopuses have three hearts and blue blood', s0: 2100, c: '#3B82F6', com: '1.2k', when: '5h', ro: 0, rf: 1 },
+  { sub: 'r/aww', title: 'My cat just discovered the vacuum cleaner', s0: 1400, c: '#F59E0B', com: '864', when: '3h', ro: 1, rf: 2 },
+  { sub: 'r/DIY', title: 'I built a tiny free library inside a hollow tree', s0: 312, s1: 18400, c: '#10B981', com: '2.6k', when: '1h', ro: 3, rf: 0 },
+  { sub: 'r/space', title: 'New telescope image reveals the Pillars of Creation', s0: 856, c: '#8B5CF6', com: '410', when: '6h', ro: 2, rf: 3 },
+];
+const CX = 860, CW = 960, CH = 210;
+const rankY = r => 75 + r * 240;
+function postCard(p, y, lt, i, o = {}) {
+  const { voted = 0, score = p.s0, lift = 0 } = o;
+  ctx.save();
+  if (lift) { ctx.translate(CX + CW / 2, y + CH / 2); ctx.scale(1 + .035 * lift, 1 + .035 * lift); ctx.translate(-CX - CW / 2, -y - CH / 2); }
+  ctx.shadowColor = `rgba(20,30,40,${.14 + .14 * lift})`; ctx.shadowBlur = 30 + 24 * lift; ctx.shadowOffsetY = 10 + 10 * lift;
+  ctx.fillStyle = '#fff'; rr(CX, y, CW, CH, 26); ctx.fill();
+  ctx.shadowColor = 'transparent';
+  if (voted) { ctx.strokeStyle = `rgba(255,69,0,${voted})`; ctx.lineWidth = 4; rr(CX, y, CW, CH, 26); ctx.stroke(); }
+  ctx.save(); rr(CX, y, CW, CH, 26); ctx.clip();
+  ctx.fillStyle = '#F6F7F8'; ctx.fillRect(CX, y, 116, CH);
+  ctx.restore();
+  const ax = CX + 58, upCol = voted ? C.orange : '#878A8C';
+  const bump = voted ? 1 + .5 * (1 - E.out3(P(lt, o.clickT || 0, .5))) * (lt >= (o.clickT || 0) ? 1 : 0) : 1;
+  ctx.fillStyle = upCol; arrowPath(ax, y + 62, .82 * bump, true); ctx.fill();
+  ctx.fillStyle = '#878A8C'; arrowPath(ax, y + CH - 44, .82, false); ctx.fill();
+  T(fmtK(score), ax, y + 118, { size: 32, weight: 800, align: 'center', color: voted ? C.orange : C.ink });
+  // thumbnail
+  const tx = CX + CW - 186, ty = y + 30;
+  const g = ctx.createLinearGradient(tx, ty, tx + 150, ty + 150);
+  g.addColorStop(0, p.c); g.addColorStop(1, '#1C1C1C');
+  ctx.fillStyle = g; rr(tx, ty, 150, 150, 22); ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.22)'; ctx.beginPath(); ctx.arc(tx + 105, ty + 48, 28, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(tx, ty + 150); ctx.lineTo(tx + 60, ty + 80); ctx.lineTo(tx + 105, ty + 130); ctx.lineTo(tx + 125, ty + 105); ctx.lineTo(tx + 150, ty + 150); ctx.closePath(); ctx.fill();
+  // text
+  ctx.fillStyle = p.c; ctx.beginPath(); ctx.arc(CX + 156, y + 48, 16, 0, 7); ctx.fill();
+  T(p.sub, CX + 182, y + 57, { size: 26, weight: 800, color: C.ink });
+  T('· ' + p.when + ' ago', CX + 182 + M(p.sub, 26, 800) + 12, y + 57, { size: 24, weight: 400, color: C.mute });
+  wrap(p.title, 580, 35, 800).slice(0, 2).forEach((ln, k) => T(ln, CX + 140, y + 108 + k * 42, { size: 35, weight: 800, color: C.ink }));
+  T(p.com + ' comments', CX + 140, y + CH - 24, { size: 24, weight: 700, color: C.mute });
+  ctx.restore();
+}
+function cursor(x, y, s = 1, press = 0) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(s * (1 - .12 * press), s * (1 - .12 * press));
+  ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 6;
+  ctx.fillStyle = '#111'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 4; ctx.lineJoin = 'round';
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, 46); ctx.lineTo(12, 35); ctx.lineTo(21, 56); ctx.lineTo(31, 52); ctx.lineTo(22, 32); ctx.lineTo(38, 32); ctx.closePath();
+  ctx.stroke(); ctx.fill(); ctx.restore();
+}
+function s3(lt) {
+  ctx.fillStyle = C.light; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(255,255,255,.55)';
+  ctx.beginPath(); ctx.arc(420 + Math.sin(lt * .4) * 40, 880, 420, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(1700, 120 + Math.cos(lt * .35) * 30, 300, 0, 7); ctx.fill();
+  // left copy
+  tag('UPVOTES', 100, 250, lt, .2);
+  const h1 = E.out5(P(lt, .45, .8)), h2 = E.out5(P(lt, .6, .8));
+  T('Members', 100 - (1 - h1) * 80, 440, { size: 150, weight: 900, color: C.ink, alpha: h1 });
+  T('vote.', 100 - (1 - h2) * 80, 590, { size: 150, weight: 900, color: C.orange, alpha: h2 });
+  const sp = E.out3(P(lt, 1.6, .8));
+  ['The best content rises', 'to the top.'].forEach((ln, k) =>
+    T(ln, 100, 690 + k * 56 + (1 - sp) * 20, { size: 46, weight: 500, color: '#4A4F55', alpha: sp }));
+  // cards
+  const enter = i => E.out5(P(lt, .5 + i * .18, .8));
+  const mv = E.inOut3(P(lt, 4.6, .95));
+  const clickT = 3.0;
+  const voted = lt >= clickT ? E.out3(P(lt, clickT, .3)) : 0;
+  const scoreC = lt < clickT ? 312 : lerp(312, 18400, E.out3(P(lt, clickT, 1.7)));
+  const order = [0, 1, 3, 2]; // draw C last so it floats above
+  order.forEach(i => {
+    const p = POSTS[i], e = enter(i);
+    if (e <= 0) return;
+    const y = lerp(rankY(p.ro), rankY(p.rf), mv) + (1 - e) * 60;
+    ctx.globalAlpha = e;
+    if (i === 2) {
+      const lift = Math.sin(clamp(mv) * Math.PI);
+      postCard(p, y, lt, i, { voted, score: scoreC, lift, clickT });
+    } else postCard(p, y, lt, i);
+    ctx.globalAlpha = 1;
+  });
+  // rising "+" arrows from C's vote column while it surges
+  if (lt > clickT && lt < clickT + 1.9) {
+    const r = rng(5);
+    for (let k = 0; k < 14; k++) {
+      const st = clickT + .05 + k * .11, q = P(lt, st, .9); if (q <= 0 || q >= 1) continue;
+      const yy = lerp(rankY(3), rankY(0), mv) + 60 - E.out3(q) * 120;
+      ctx.fillStyle = C.orange; ctx.globalAlpha = (1 - q) * .9;
+      arrowPath(CX + 58 + (r() - .5) * 60, yy, .34, true); ctx.fill(); ctx.globalAlpha = 1;
+    }
+  }
+  // #1 badge
+  const bp = E.back(P(lt, 5.7, .5));
+  if (bp > 0) {
+    ctx.save(); ctx.translate(CX + CW - 96, rankY(0) - 6); ctx.scale(bp, bp);
+    ctx.fillStyle = C.orange; rr(-82, -30, 164, 60, 30); ctx.fill();
+    T('#1 today', 0, 12, { size: 30, weight: 800, align: 'center' }); ctx.restore();
+  }
+  // cursor + click ripple
+  const cp = E.inOut3(P(lt, 1.6, 1.25));
+  if (lt > 1.5 && lt < 4.0) {
+    const tx = CX + 66, ty = rankY(3) + 66;
+    const away = E.inOut3(P(lt, clickT + .1, .6));
+    const x = lerp(1720, tx, cp) + away * 90, y = lerp(1040, ty, cp) - Math.sin(cp * Math.PI) * 60 + away * 80;
+    const press = lt > clickT - .08 && lt < clickT + .12 ? 1 : 0;
+    ctx.globalAlpha = clamp(P(lt, 1.5, .3)) * (1 - P(lt, clickT + .15, .45));
+    cursor(x, y, 1, press); ctx.globalAlpha = 1;
+  }
+  if (lt > clickT && lt < clickT + .8) {
+    const q = P(lt, clickT, .8);
+    ctx.strokeStyle = `rgba(255,69,0,${1 - q})`; ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.arc(CX + 58, rankY(3) + 62, 20 + q * 90, 0, 7); ctx.stroke();
+  }
+}
+
+/* ==================================================================
+   S4 — comment threads (17.5 → 22.5s)
+================================================================== */
+const THREAD = [
+  { u: 'nightowl_42', c: C.orange, t: '2h', lv: 0, v: 1240, at: .3, txt: 'How do I make my sourdough rise faster?' },
+  { u: 'breadhead', c: C.blue, t: '2h', lv: 1, v: 3800, at: 1.0, txt: 'Keep it warm. Around 78°F is the sweet spot.' },
+  { u: 'flourpower', c: C.green, t: '1h', lv: 2, v: 962, at: 1.7, txt: 'Oven light on plus a bowl of hot water. Works every time.' },
+  { u: 'nightowl_42', c: C.orange, t: '32m', lv: 3, v: 2400, at: 2.4, txt: 'It worked! Best loaf I’ve ever made. Thank you all!' },
+  { u: 'crumbcoach', c: C.purple, t: '1h', lv: 1, v: 1100, at: 3.0, txt: 'Also try a longer, colder ferment for more flavor.' },
+];
+const TH_X = 900, TH_W = 900, TH_H = 150, TH_GAP = 16, TH_Y = 125, IND = 56;
+const thPos = i => ({ x: TH_X + THREAD[i].lv * IND, y: TH_Y + i * (TH_H + TH_GAP), w: TH_W - THREAD[i].lv * IND });
+function s4(lt) {
+  ctx.fillStyle = C.dark; ctx.fillRect(0, 0, W, H);
+  dotGrid(lt, '#fff', .06);
+  glow(200, 200, 800, '255,69,0', .16);
+  glow(1700, 950, 700, '70,209,96', .08);
+  // left copy
+  tag('COMMENTS', 100, 250, lt, .1);
+  const h1 = E.out5(P(lt, .3, .8)), h2 = E.out5(P(lt, .45, .8));
+  T('Real', 100 - (1 - h1) * 80, 410, { size: 96, weight: 900, alpha: h1 });
+  T('conversations.', 100 - (1 - h2) * 80, 515, { size: 96, weight: 900, color: C.orange, alpha: h2 });
+  const sp = E.out3(P(lt, 1.2, .8));
+  wrap('Ask a question. Get answers from people who have been there.', 690, 42, 400)
+    .forEach((ln, k) => T(ln, 100, 600 + k * 56 + (1 - sp) * 20, { size: 42, weight: 400, color: '#A9AFB5', alpha: sp }));
+  // connectors first (they sit to the left of nested cards)
+  THREAD.forEach((it, i) => {
+    if (it.lv === 0) return;
+    let pi = i - 1; while (THREAD[pi].lv !== it.lv - 1) pi--;
+    const a = thPos(pi), b = thPos(i);
+    const sx = a.x + 44, sy = a.y + 74, ey = b.y + 44, ex = b.x + 18;
+    const len = (ey - sy) + (ex - sx), q = E.out3(P(lt, it.at - .25, .55));
+    if (q <= 0) return;
+    ctx.save(); ctx.strokeStyle = '#4A4E52'; ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.setLineDash([len * q, len + 10]);
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(sx, ey - 18); ctx.quadraticCurveTo(sx, ey, sx + 18, ey); ctx.lineTo(ex, ey); ctx.stroke();
+    ctx.restore();
+  });
+  THREAD.forEach((it, i) => {
+    const e = E.out5(P(lt, it.at, .55)); if (e <= 0) return;
+    const { x, y, w } = thPos(i);
+    ctx.save(); ctx.globalAlpha = e; ctx.translate(40 * (1 - e), 0);
+    ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 26; ctx.shadowOffsetY = 8;
+    ctx.fillStyle = C.card; rr(x, y, w, TH_H, 24); ctx.fill(); ctx.shadowColor = 'transparent';
+    ctx.strokeStyle = i === 0 ? 'rgba(255,69,0,.7)' : '#2C3034'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = it.c; ctx.beginPath(); ctx.arc(x + 44, y + 44, 26, 0, 7); ctx.fill();
+    T(it.u[0].toUpperCase(), x + 44, y + 54, { size: 28, weight: 800, align: 'center' });
+    T('u/' + it.u, x + 84, y + 42, { size: 26, weight: 800 });
+    T('· ' + it.t + ' ago', x + 84 + M('u/' + it.u, 26, 800) + 10, y + 42, { size: 24, weight: 400, color: '#8A9096' });
+    // vote count
+    const vv = Math.round(it.v * E.out3(P(lt, it.at + .2, 1.0)));
+    const vs = fmtK(vv), vw = M(vs, 26, 800);
+    T(vs, x + w - 28, y + 42, { size: 26, weight: 800, color: C.orange, align: 'right' });
+    ctx.fillStyle = C.orange; arrowPath(x + w - 28 - vw - 22, y + 34, .45, true); ctx.fill();
+    // typed body
+    const lines = wrap(it.txt, w - 110, 31, 500), total = it.txt.length;
+    let shown = Math.floor(total * E.lin(P(lt, it.at + .2, .65)));
+    lines.forEach((ln, k) => {
+      const n = clamp(shown, 0, ln.length + 1); shown -= ln.length + 1;
+      if (n > 0) T(ln.slice(0, n), x + 30, y + 96 + k * 38, { size: 31, weight: 500, color: '#E1E4E6' });
+    });
+    ctx.restore();
+  });
+}
+
+/* ==================================================================
+   S5 — numbers (22.5 → 27.5s)
+================================================================== */
+const STATS = [
+  { label: 'Founded', sub: 'by two college roommates', col: C.orange, x: 400, at: .7, fmt: p => String(Math.round(lerp(2000, 2005, p))) },
+  { label: 'active communities', sub: 'on every topic imaginable', col: C.blue, x: 960, at: 1.3, fmt: p => Math.round(100 * p) + (p >= 1 ? 'K+' : 'K') },
+  { label: 'daily visitors', sub: 'people from around the world', col: C.green, x: 1520, at: 1.9, fmt: p => Math.round(100 * p) + (p >= 1 ? 'M+' : 'M') },
+];
+function s5(lt) {
+  ctx.fillStyle = C.warm; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(255,69,0,.08)';
+  ctx.beginPath(); ctx.arc(1920, 0, 520 + Math.sin(lt) * 20, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(0, 1080, 380, 0, 7); ctx.fill();
+  letters('Reddit by the numbers', 960, 200, 92, 900, C.ink, lt, .15, .035, .7, 60);
+  const cy = 540, R = 178;
+  STATS.forEach(s => {
+    const q = E.inOut3(P(lt, s.at, 1.3)), vis = E.out3(P(lt, s.at - .2, .4));
+    if (vis <= 0) return;
+    ctx.save(); ctx.globalAlpha = vis;
+    ctx.strokeStyle = '#F1E0D5'; ctx.lineWidth = 26; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.arc(s.x, cy, R, 0, 7); ctx.stroke();
+    const a0 = -Math.PI / 2, a1 = a0 + q * Math.PI * 2;
+    ctx.strokeStyle = s.col;
+    if (q > 0) { ctx.beginPath(); ctx.arc(s.x, cy, R, a0, a1); ctx.stroke(); }
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(s.x + Math.cos(a1) * R, cy + Math.sin(a1) * R, 8, 0, 7); ctx.fill();
+    const pop = 1 + .06 * Math.sin(P(lt, s.at + 1.3, .5) * Math.PI);
+    ctx.translate(s.x, cy); ctx.scale(pop, pop); ctx.translate(-s.x, -cy);
+    T(s.fmt(q), s.x, cy + 26, { size: 72, weight: 900, align: 'center', color: C.ink });
+    ctx.restore();
+    const lp = E.out3(P(lt, s.at + .7, .6));
+    T(s.label, s.x, cy + R + 88 + (1 - lp) * 20, { size: 46, weight: 800, align: 'center', color: s.col, alpha: lp });
+    const sp = E.out3(P(lt, s.at + 1.0, .6));
+    T(s.sub, s.x, cy + R + 138 + (1 - sp) * 20, { size: 30, weight: 400, align: 'center', color: '#6B6F74', alpha: sp });
+  });
+  T('Approximate figures based on Reddit’s public reports.', 960, 1024, { size: 24, weight: 400, align: 'center', color: '#9A9EA3', alpha: E.out3(P(lt, 3.4, .6)) });
+}
+
+/* ==================================================================
+   S6 — outro (27.5 → 30s)
+================================================================== */
+function s6(lt) {
+  ctx.fillStyle = C.orange; ctx.fillRect(0, 0, W, H);
+  glow(960, 330, 900, '255,150,90', .35);
+  pulseRings(lt, 960, 340, .1, 180, .16);
+  const p = E.back(P(lt, .1, .8));
+  burst(lt, .3, 960, 340, 14, 300, '#fff', 23);
+  snoo(960, 340 + Math.sin(lt * 2.2) * 6, 150 * p, { tilt: Math.sin(lt * 1.6) * .03 });
+  letters('Dive in.', 960, 745, 230, 900, '#fff', lt, .5, .07, .8, 120);
+  const q = E.back(P(lt, 1.3, .6));
+  if (q > 0) {
+    const label = 'reddit.com', w = M(label, 54, 800) + 100;
+    ctx.save(); ctx.translate(960, 875); ctx.scale(q, q);
+    ctx.shadowColor = 'rgba(120,20,0,.35)'; ctx.shadowBlur = 30; ctx.shadowOffsetY = 12;
+    ctx.fillStyle = '#fff'; rr(-w / 2, -50, w, 100, 50); ctx.fill(); ctx.shadowColor = 'transparent';
+    T(label, 0, 19, { size: 54, weight: 800, color: C.orange, align: 'center' });
+    ctx.restore();
+  }
+}
+
+/* ==================================================================
+   Timeline + circular-wipe transitions
+================================================================== */
+const SCENES = [s1, s2, s3, s4, s5, s6];
+const BG = [C.orange, C.dark, C.light, C.dark, C.warm, C.orange];
+const B = [5, 10, 17.5, 22.5, 27.5];
+const START = [0, ...B];
+const ORIGIN = [[960, 410], [1500, 540], [420, 540], [1500, 300], [960, 540]];
+const TD = 1.0;
+
+function frame(t) {
+  ctx.clearRect(0, 0, W, H);
+  let i = 0; while (i < B.length && t >= B[i]) i++;
+  if (i === 0 || t - B[i - 1] >= TD) { SCENES[i](t - START[i]); return; }
+  const q = E.inOut3(P(t, B[i - 1], TD));
+  ctx.fillStyle = BG[i - 1]; ctx.fillRect(0, 0, W, H);
+  ctx.save(); ctx.translate(W / 2, H / 2); const sc = 1 - .07 * q; ctx.scale(sc, sc); ctx.translate(-W / 2, -H / 2);
+  SCENES[i - 1](t - START[i - 1]); ctx.restore();
+  const [ox, oy] = ORIGIN[i - 1], R = q * Math.hypot(W, H) * 1.05;
+  ctx.save(); ctx.beginPath(); ctx.arc(ox, oy, R, 0, 7); ctx.clip();
+  SCENES[i](t - B[i - 1]); ctx.restore();
+  if (q < .97) {
+    ctx.strokeStyle = `rgba(255,255,255,${.5 * (1 - q)})`; ctx.lineWidth = 12 * (1 - q) + 2;
+    ctx.beginPath(); ctx.arc(ox, oy, R, 0, 7); ctx.stroke();
+  }
+}
+
+window.draw = frame;
+window.DUR = DUR;
+window.ready = document.fonts.load('900 100px Inter').then(() =>
+  Promise.all([400, 700, 800].map(w => document.fonts.load(`${w} 40px Inter`))));
+
+if (!location.search.includes('render')) {
+  window.ready.then(() => {
+    const t0 = performance.now();
+    (function loop() { frame(((performance.now() - t0) / 1000) % DUR); requestAnimationFrame(loop); })();
+  });
+}
+</script>
+</body>
+</html>
